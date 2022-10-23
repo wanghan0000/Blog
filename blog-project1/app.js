@@ -1,6 +1,17 @@
 const querystring = require('querystring')
 const handleBlogRouter = require('./src/router/blog')
 const handleUserRouter = require('./src/router/user')
+const { get, set } = require('../blog-project1/src/db/redis')
+
+//session 数据
+//const SESSION_DATA = {};
+
+//获取cookie过期时间
+const getCookieExpires = () => {
+    const d = new Date()
+    d.setTime(d.getTime() + (24 * 60 * 60 * 1000))
+    return d.toGMTString()
+}
 
 const getPostData = (req) => {
     const promise = new Promise((resolve, reject) => {
@@ -29,7 +40,7 @@ const getPostData = (req) => {
     return promise
 }
 
-const serverHandle = (req, res) => {
+const serverHandle = async (req, res) => {
     //设置返回格式 JSON
     res.setHeader('Content-type', 'application/json')
 
@@ -43,11 +54,49 @@ const serverHandle = (req, res) => {
     //解析cookie
     const coookieStr = req.headers.cookie || ''
     coookieStr.split(';').forEach(element => {
+        if (!element) {
+            return
+        }
         const arr = element.split('=')
         const key = arr[0].trim()
         const val = arr[1].trim()
         req.cookie[key] = val
     });
+
+    //解析session
+    // let needSetCookie = false
+    // let userId = req.cookie.userid
+    // if(userId){
+    //     if(!SESSION_DATA[userId]){
+    //         SESSION_DATA[userId] = {}
+    //     }
+    // }else {
+    //     needSetCookie = true
+    //     userId = `${Date.now()}_${Math.random()}` 
+    //     SESSION_DATA[userId] = {}
+    // }
+    // req.session = SESSION_DATA[userId]
+
+    //解析session 使用 redis
+    let needSetCookie = false
+    let userId = req.cookie.userid
+    if (!userId) {
+        needSetCookie = true
+        userId = `${Date.now()}_${Math.random()}`
+        await set(userId, {})
+    }
+    //获取session
+    req.sessionId = userId
+    const sessionData = await get(userId)
+    if(sessionData == null){
+        // 初始化
+        await set(req.sessionId, {})
+        //设置session
+        req.session = {}
+    }else {
+        req.session = sessionData
+    }
+    console.log('req.session ', req.session)
 
     //处理 post data
     getPostData(req).then(postData => {
@@ -63,9 +112,14 @@ const serverHandle = (req, res) => {
             return
         }
 
-        const userResult = handleUserRouter(req,res)
-        if(userResult) {
+        const userResult = handleUserRouter(req, res)
+        if (userResult) {
             userResult.then(userData => {
+                if (needSetCookie) {
+                    //操作cookie 
+                    res.setHeader('Set-Cookie',
+                        `userid=${userId}; path=/; httpOnly; expires:${getCookieExpires()};`)
+                }
                 res.end(
                     JSON.stringify(userData)
                 )
